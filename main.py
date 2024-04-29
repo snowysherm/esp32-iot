@@ -1,8 +1,16 @@
 from machine import ADC, Pin, SoftI2C
 from dht import DHT22
 from ssd1306 import SSD1306_I2C
-from time import sleep
+import time
 import json
+from umqtt.simple import MQTTClient
+
+mqtt_broker = "mosquitto.nodered-fi.ipv64.net"
+mqtt_port = 1883
+mqtt_user = "FI"
+mqtt_password = "FI"
+mqtt_topic = "Met/FI/krause"
+client_id = "krause2003"
 
 sensor = DHT22(Pin(15))
 pir = Pin(2)
@@ -11,7 +19,7 @@ led = Pin(33, Pin.OUT)
 led_red = Pin(25, Pin.OUT)
 led_yellow = Pin(26, Pin.OUT)
 led_green = Pin(27, Pin.OUT)
-i2c = SoftI2C(scl=Pin(22), sda=Pin(21), freq=400000)
+i2c = SoftI2C(scl=Pin(22), sda=Pin(23), freq=400000)
 oled = SSD1306_I2C(128, 64, i2c)
 
 
@@ -24,32 +32,31 @@ def oled_show(temperature, humidity):
     oled.show()
 
 
-def sensor_measure_temperature():
+def measure_temperature():
     sensor.measure()
     return sensor.temperature()
 
-
 def temperature_led():
-    if sensor_measure_temperature() <= 20:
-        led_green.on()
-        led_yellow.off()
-        led_red.off()
-    elif sensor_measure_temperature() >= 30:
+    if measure_temperature() >= 30:
         led_red.on()
         led_green.off()
         led_yellow.off()
-    elif sensor_measure_temperature() >= 25:
+    elif measure_temperature() >= 25:
         led_yellow.on()
         led_red.off()
         led_green.off()
+    elif measure_temperature() >= 20:
+        led_green.on()
+        led_yellow.off()
+        led_red.off()
 
 
-def sensor_measure_humidity():
+def measure_humidity():
     sensor.measure()
     return sensor.humidity()
 
 
-def photo_measure():
+def measure_photo():
     rl10 = 50
     gamma = 0.7
     dings = ADC(photo_sensor)
@@ -65,10 +72,21 @@ def json_store(temperature, humidity, lux):
         "temperature": temperature,
         "humidity": humidity,
         "lux": lux,
+        "motion": pir.value()
     }
 
     return json.dumps(data)
 
+def send_json_data():
+    try:
+        client = MQTTClient(client_id, mqtt_broker, mqtt_port, mqtt_user, mqtt_password)
+        client.connect()
+        json_data = json_store(measure_temperature(), measure_humidity(), measure_photo())
+        client.publish(mqtt_topic, json_data)
+        client.disconnect()
+        print("JSON Daten erfolgreich gesendet.")
+    except Exception as e:
+        print("Fehler beim Senden der JSON Daten:", e)
 
 def motion_sensor():
     if pir.value() == 1:
@@ -83,14 +101,12 @@ def print_to_terminal(temperature, humidity, lux):
     print(f"Lux: {lux}")
     print("-----------------------")
 
-
 while True:
     temperature_led()
-    json_store(sensor_measure_temperature(),
-               sensor_measure_humidity(), photo_measure())
-    oled_show(sensor_measure_temperature(), sensor_measure_humidity())
+    oled_show(measure_temperature(), measure_humidity())
     motion_sensor()
-    print_to_terminal(sensor_measure_temperature(),
-                      sensor_measure_humidity(), photo_measure())
+    print_to_terminal(measure_temperature(), measure_humidity(), measure_photo())
+    send_json_data()
+    time.sleep(2)
 
-    sleep(2)
+
